@@ -1,4 +1,5 @@
-from itertools import count, ifilter, imap, izip, chain
+from itertools import ifilter, imap, izip, chain
+from itertools import count as C_O_U_N_T
 from collections import defaultdict, namedtuple
 from math import sqrt
 import dolfin as df
@@ -82,10 +83,17 @@ class LPCollection(object):
         num_tensor_entries = 1
         for i in range(element.value_rank()): num_tensor_entries *= element.value_dimension(i)
 
-        self.coefficients = np.zeros(element.space_dimension())
         self.basis_matrix = np.zeros((element.space_dimension(), num_tensor_entries))
         self.element = element
-        self.num_tensor_entries = num_tensor_entries
+
+        # Let's decide how to do stepping
+        if element.value_rank() == 1:
+            self.step = self.__step_vector
+            self.coefficients = np.zeros(element.space_dimension())
+        else:
+            assert element.value_rank() == 0
+            self.step = self.__step_scalar
+            self.coefficients = np.zeros((self.dim, element.space_dimension()))
 
         # Particles and cells are stored in dicts and we refer to each by ints.
         # For cell this is the cell index, particles get a ticket from their
@@ -93,7 +101,7 @@ class LPCollection(object):
         # dictionary in turn particles.keys may develop 'holes'.
         self.particles = {}
         self.cells = {}
-        self.ticket = count()
+        self.ticket = C_O_U_N_T()
 
         # Property layout here is the map which maps property name to
         # length of a vector that represents property value. By default
@@ -120,21 +128,6 @@ class LPCollection(object):
             self.__update = add_timer(self.__update)
 
     # Most common in API ---
-
-    def step(self, u, dt, verbose=False):
-        'Move particles by forward Euler x += u*dt'
-        # Update positions of particles
-        for c in self.cells.itervalues():
-            vertex_coords, orientation = c.get_vertex_coordinates(), c.orientation()
-            # Restrict once per cell
-            u.restrict(self.coefficients, self.element, c, vertex_coords, c)
-            for p in c.particles:
-                x = self.get_x(p)
-                # Compute velocity at position x
-                self.element.evaluate_basis_all(self.basis_matrix, x, vertex_coords, orientation)
-                x[:] = x[:] + dt*np.dot(self.coefficients, self.basis_matrix)[:]
-        # Update cells/particles
-        self.__update(verbose)
 
     def add_particles(self, particles, verbose=False):
         '''Add new particles to collection.'''
@@ -199,6 +192,39 @@ class LPCollection(object):
         return c if c < self.lim else -1
 
     # Core ---
+
+    def __step_vector(self, u, dt, verbose=False):
+        'Move particles by forward Euler x += u*dt'
+        # Update positions of particles
+        for c in self.cells.itervalues():
+            vertex_coords, orientation = c.get_vertex_coordinates(), c.orientation()
+            # Restrict once per cell
+            u.restrict(self.coefficients, self.element, c, vertex_coords, c)
+            for p in c.particles:
+                x = self.get_x(p)
+                # Compute velocity at position x
+                self.element.evaluate_basis_all(self.basis_matrix, x, vertex_coords, orientation)
+                x[:] = x[:] + dt*np.dot(self.coefficients, self.basis_matrix)[:]
+        # Update cells/particles
+        self.__update(verbose)
+
+    def __step_scalar(self, u, dt, verbose=False):
+        'Move particles by forward Euler x += u*dt'
+        # Update positions of particles
+        for c in self.cells.itervalues():
+            vertex_coords, orientation = c.get_vertex_coordinates(), c.orientation()
+            # Restrict once per cell each components
+            for i, ui in enumerate(u):
+                ui.restrict(self.coefficients[i], self.element, c, vertex_coords, c)
+
+            for p in c.particles:
+                x = self.get_x(p)
+                # Compute velocity at position x
+                self.element.evaluate_basis_all(self.basis_matrix, x, vertex_coords, orientation)
+                for i in range(self.dim):
+                    x[i] += dt*np.dot(self.coefficients[i], self.basis_matrix)[:]
+        # Update cells/particles
+        self.__update(verbose)
 
     def __add_particles_local(self, particles):
         '''Search CPU for cells that have particles.'''
@@ -363,6 +389,7 @@ def subdomain_seed(lpc, nparticles, subdomains=None, markers=None):
 if __name__ == '__main__':
     from dolfin import UnitSquareMesh, VectorFunctionSpace, info, Timer, interpolate
     from dolfin import Expression, CellFunction, cells, UnitCubeMesh, CompiledSubDomain
+    from dolfin import FunctionSpace
     from mpi4py import MPI as pyMPI
     import sys
 
@@ -381,7 +408,6 @@ if __name__ == '__main__':
 
     lpc.store('test.xdmf')
     df.File('test_mesh.pvd') << mesh
-    exit()
 
     mesh = UnitSquareMesh(20, 20)
     V = VectorFunctionSpace(mesh, 'CG', 1)
@@ -391,7 +417,7 @@ if __name__ == '__main__':
     dt = 0.001
 
     # TEST1: Check correctness
-    if False:
+    if True:
         property_layout = [('x1', 2)]
         lpc = LPCollection(V, property_layout)
 
@@ -439,3 +465,31 @@ if __name__ == '__main__':
 
     count = lpc.particle_count()
     info('Stepped %d particles in %g s' % (count.gc, dt))
+
+    # Check scalar stepping
+    mesh = UnitSquareMesh(20, 20)
+    V = FunctionSpace(mesh, 'CG', 1)
+    v0 = interpolate(Expression('-(x[1]-0.5)', degree=1), V)
+    v1 = interpolate(Expression('x[0]-0.5', degree=1), V)
+    v = [v0, v1]
+
+    dt = 0.001
+    # TEST1: Check correctness
+    if True:
+        property_layout = [('x1', 2)]
+        lpc = LPCollection(V, property_layout)
+
+        particles_x0 = 0.8*np.random.rand(nparticles, 2)
+
+        x, y = particles_x0[:, 0], particles_x0[:, 1]
+        particles_x1 = particles_x0 + dt*np.c_[-(y-0.5), (x-0.5)]
+
+        particles = np.c_[particles_x0, particles_x1]
+
+        lpc.add_particles(particles)
+        lpc.step(v, dt)
+
+        loc_error = max(np.linalg.norm(lpc.get_property(p, 'x') - lpc.get_property(p, 'x1'))
+                        for p in lpc.particles)
+        glob_error = lpc.comm.allreduce(loc_error, op=pyMPI.MAX)
+        info('%g %g' % (loc_error, glob_error))

@@ -116,22 +116,22 @@ class NS3rdVentricle(NSProblem):
 	icu = [c0 ,c0 ,c0]
 	icp = c0
 
-        # Initialize the particles here. I think this is the first place
-        # velocity space is available. FIXME: make it work with scalar space
-        # representing component
-        lpc = LPCollection(spaces.V)
-        # For now we add particles everywhere. NOTE: nparticles is the total
-        # count.
+        # Initialize the particles here. I think this is the first place where
+        # velocity space is available. Init might be a better place for this
+        # but this is close second
+        lpc = LPCollection(spaces.U)
+        # For now we add particles everywhere. Later subdomains (CellFunction)
+        # and markers for selected regions should be also given
+        # NOTE: nparticles is the total count.
         nparticles = self.params.nparticles/lpc.comm.size
         subdomain_seed(lpc, nparticles)
         self.lpc = lpc
-        self.Vconvert = None
-        # Finally a filw to hold particle
-        if lpc.comm.rank == 0:
-            particle_log = 'particles.log'
-            f = open(particle_log, 'w')
+
+        # FIXME: this should be part of some postprocessor
+        if self.lpc.comm.rank == 0:
+            self.particle_log = 'test.txt'
+            f = open(self.particle_log, 'w')
             f.close()
-            self.particle_log = 'particles.log'
 
         return (icu ,icp)
 
@@ -169,12 +169,8 @@ class NS3rdVentricle(NSProblem):
         return (bcu, bcp)
 
     def update(self, spaces, u, p, t, timestep, bcs, observations, controls):
-        # FIXME: make it work with scalar space representing component
-        # convert u components to proper function
-        if self.Vconvert is None:
-            self.Vconvert = VelocityConverter()
-        ustep = self.Vconvert(u, spaces)
-        self.lpc.step(ustep, self.params.dt)
+        # FIXME: ideally this should be part of solver.solve(...)
+        self.lpc.step(u, self.params.dt)
 
         # Storing, FIXME: this should be part of some postprocessor
         nparticles = self.lpc.particle_count().gc
