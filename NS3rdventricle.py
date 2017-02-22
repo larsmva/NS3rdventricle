@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+from cbcflow.fields.converters import VelocityConverter
+from particles import LPCollection, subdomain_seed, subdomain_count
 
 from cbcflow import *
 from cbcpost import PostProcessor
@@ -25,7 +27,8 @@ class NS3rdVentricle(NSProblem):
             mu=0.000676,
 	    mesh_file="3rdventricle-refine1.xml.gz",
             )
-        params.update(Q=160
+        params.update(Q=160,
+                      nparticles=5000  # This is approx total init number of particles
             # Spatial parameters
             # Analytical solution parameters
             )
@@ -112,6 +115,24 @@ class NS3rdVentricle(NSProblem):
 	c0 =Constant("0.0")
 	icu = [c0 ,c0 ,c0]
 	icp = c0
+
+        # Initialize the particles here. I think this is the first place where
+        # velocity space is available. Init might be a better place for this
+        # but this is close second
+        lpc = LPCollection(spaces.U)
+        # For now we add particles everywhere. Later subdomains (CellFunction)
+        # and markers for selected regions should be also given
+        # NOTE: nparticles is the total count.
+        nparticles = self.params.nparticles/lpc.comm.size
+        subdomain_seed(lpc, nparticles)
+        self.lpc = lpc
+
+        # FIXME: this should be part of some postprocessor
+        if self.lpc.comm.rank == 0:
+            self.particle_log = 'test.txt'
+            f = open(self.particle_log, 'w')
+            f.close()
+
         return (icu ,icp)
 
     def boundary_conditions(self, spaces, u, p, t, controls):
@@ -148,6 +169,16 @@ class NS3rdVentricle(NSProblem):
         return (bcu, bcp)
 
     def update(self, spaces, u, p, t, timestep, bcs, observations, controls):
+        # FIXME: ideally this should be part of solver.solve(...)
+        self.lpc.step(u, self.params.dt)
+
+        # Storing, FIXME: this should be part of some postprocessor
+        nparticles = self.lpc.particle_count().gc
+        if self.lpc.comm.rank == 0:
+            f = open(self.particle_log, 'a')
+            f.write('%d\n' % nparticles)
+            f.close()
+
         bcu, bcp = bcs
         uin = bcu[1][0]
         for ucomp in uin:
