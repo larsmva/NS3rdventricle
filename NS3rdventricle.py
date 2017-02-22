@@ -9,6 +9,7 @@ from dolfin import *
 from os import path
 import numpy as np
 
+from compute_flux import *
 
 class NS3rdVentricle(NSProblem):
     "3D pipe test problem with known transient analytical solution."
@@ -68,7 +69,7 @@ class NS3rdVentricle(NSProblem):
             tvalues = np.linspace(0.0, P)
             #Qfloor, Qpeak = 1.0, 0.0
             #Qfloor, Qpeak = 0.3, 0.7
-            Qfloor, Qpeak = -140.0, 300.0
+            Qfloor, Qpeak = -0.9, 1.9
             Qvalues = Q * (Qfloor + (Qpeak-Qfloor)*np.sin(pi*((P-tvalues)/P)**2)**2)
             Qvalues2 = Q2 * (Qfloor + (Qpeak-Qfloor)*np.sin(pi*((P-tvalues)/P)**2)**2)
             self.Q_coeffs = zip(tvalues, Qvalues)
@@ -214,7 +215,7 @@ def main():
     fields = [
         Pressure(plot_and_save),
         Velocity(plot_and_save),
-        ]
+        Fluxrate(1, plot_and_save)]
     postproc = PostProcessor({"casedir": casedir})
     postproc.add_fields(fields)
 
