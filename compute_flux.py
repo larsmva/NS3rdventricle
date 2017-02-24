@@ -1,6 +1,6 @@
 from cbcpost.fieldbases.Field import Field
 from dolfin import *
-class Fluxrate(Field):
+class Flux(Field):
     def __init__(self, tag,params=None, name=None):
         Field.__init__(self,params,"FluxThrough"+str(tag), label=None)
 	self.tag=tag

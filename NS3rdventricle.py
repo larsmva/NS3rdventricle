@@ -12,26 +12,21 @@ import numpy as np
 from compute_flux import *
 
 class NS3rdVentricle(NSProblem):
-    "3D pipe test problem with known transient analytical solution."
 
     @classmethod
     def default_params(cls):
         params = NSProblem.default_params()
         params.replace(
-            # Time parameters
             T=None,
             dt=8e-5,
             period=0.8,
             num_periods=1.0,
-            # Physical parameters
             rho=0.000993,
             mu=0.000676,
-	    mesh_file="3rdventricle-refine1.xml.gz",
+            mesh_file="3rdventricle-refine1.xml.gz",
             )
         params.update(Q=160,
                       nparticles=5000  # This is approx total init number of particles
-            # Spatial parameters
-            # Analytical solution parameters
             )
         return params
 
@@ -39,18 +34,17 @@ class NS3rdVentricle(NSProblem):
         NSProblem.__init__(self, params)
 
         # Load mesh
-        
-       	mesh = Mesh("3rdventricle-refine1.xml.gz")
+        print self.params
+       	mesh = Mesh("3rdventricle.xml.gz")
 
         #mesh = Mesh(self.params.mesh_filename)
 
-        # We know that the mesh contains markers with these id values
         self.wall_boundary_id = 0
         self.aquaduct_boundary_id = 2
         self.right_lateral_ventricle_boundary_id = 1
 	self.left_lateral_ventricle_boundary_id = 3
 
-        # Setup analytical solution constants
+        
         Q = self.params.Q
 	Q2 = Q*0.5
         self.nu = 0.6828 #self.params.mu / self.params.rho
@@ -67,33 +61,30 @@ class NS3rdVentricle(NSProblem):
             print "Using transient bcs."
             P = self.params.period
             tvalues = np.linspace(0.0, P)
-            #Qfloor, Qpeak = 1.0, 0.0
-            #Qfloor, Qpeak = 0.3, 0.7
-            Qfloor, Qpeak = -0.9, 1.9
+
+            Qfloor, Qpeak = -0.9, 1.9 #relative peak and floor.
             Qvalues = Q * (Qfloor + (Qpeak-Qfloor)*np.sin(pi*((P-tvalues)/P)**2)**2)
             Qvalues2 = Q2 * (Qfloor + (Qpeak-Qfloor)*np.sin(pi*((P-tvalues)/P)**2)**2)
             self.Q_coeffs = zip(tvalues, Qvalues)
 	    self.Q_coeffs2 = zip(tvalues, Qvalues)
 		
         # Store mesh and markers
-        self.initialize_geometry(mesh) #, facet_domains=facet_domains)
+        self.initialize_geometry(mesh) #, facet_domains=facet_domains) #Inlcude facet_domains ? 
 
     def womersly_aquaduct(self, spaces, t):
-        # Create womersley objects
         ua = make_womersley_bcs(self.Q_coeffs, self.mesh, self.aquaduct_boundary_id, self.nu, None)
         for uc in ua:
             uc.set_t(t)
         pa = Expression("-beta", beta=1.0,degree=1)
-        pa.beta = 0.0 # self.beta # TODO: This is not correct unless stationary...
+        pa.beta = 0.0 
         return (ua, pa)
 
     def womersly_rlv(self, spaces, t):
-        # Create womersley objects
         ua = make_womersley_bcs(self.Q_coeffs2, self.mesh, self.right_lateral_ventricle_boundary_id , self.nu, None)
         for uc in ua:
             uc.set_t(t)
         pa = Expression("-beta ", beta=1.0,degree=1)
-        pa.beta = 0.0 #self.beta2 # TODO: This is not correct unless stationary...
+        pa.beta = 0.0 
         return (ua, pa)
 
     def womersly_llv(self, spaces, t):
@@ -102,7 +93,7 @@ class NS3rdVentricle(NSProblem):
         for uc in ua:
             uc.set_t(t)
         pa = Expression("-beta", beta=1.0,degree=1)
-        pa.beta = self.beta2 # TODO: This is not correct unless stationary...
+        pa.beta = 0.0
         return (ua, pa)
 
 
@@ -142,23 +133,21 @@ class NS3rdVentricle(NSProblem):
         u0 = [Constant(0.0)] * d
         noslip = (u0, self.wall_boundary_id)
 
-	ua, pa = self.womersly_aquaduct( spaces, t)
+        ua, pa = self.womersly_aquaduct( spaces, t)
    	
-	inflow  = ( ua, self.aquaduct_boundary_id)
-	p_inflow = ( pa, self.aquaduct_boundary_id)
+        inflow  = ( ua, self.aquaduct_boundary_id)
+        p_inflow = ( pa, self.aquaduct_boundary_id)
 
 
         # Create outflow boundary conditions for velocity
         ul,pl = self.womersly_llv(spaces, t)
         ur,pr = self.womersly_rlv(spaces, t)
-   
 
-	ur_outflow = (ur,self.right_lateral_ventricle_boundary_id)
-	ul_outflow = (ul,self.left_lateral_ventricle_boundary_id)
+        ur_outflow = (ur,self.right_lateral_ventricle_boundary_id)
+        ul_outflow = (ul,self.left_lateral_ventricle_boundary_id)
 
-	pr_outflow = (pr,self.right_lateral_ventricle_boundary_id)
-	pl_outflow = (pl,self.left_lateral_ventricle_boundary_id)
-
+        pr_outflow = (pr,self.right_lateral_ventricle_boundary_id)
+        pl_outflow = (pl,self.left_lateral_ventricle_boundary_id)
 	
         # Return bcs in two lists
         bcu = [noslip,inflow]
@@ -174,7 +163,7 @@ class NS3rdVentricle(NSProblem):
         self.lpc.step(u, self.params.dt)
 
         # Storing, FIXME: this should be part of some postprocessor
-        nparticles = self.lpc.particle_count().gc
+        nparticles = self.lpc.particle_count().gc 
         if self.lpc.comm.rank == 0:
             f = open(self.particle_log, 'a')
             f.write('%d\n' % nparticles)
@@ -215,7 +204,9 @@ def main():
     fields = [
         Pressure(plot_and_save),
         Velocity(plot_and_save),
-        Fluxrate(1, plot_and_save)]
+        Flux(1, plot_and_save),
+	Flux(2, plot_and_save),
+	Flux(3, plot_and_save)]
     postproc = PostProcessor({"casedir": casedir})
     postproc.add_fields(fields)
 
