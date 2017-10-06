@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 from cbcflow.fields.converters import VelocityConverter
-from particles import LPCollection, subdomain_seed, subdomain_count
+from ParticleField import LPCollection, subdomain_seed, subdomain_count
 
 from cbcflow import *
-from cbcpost import PostProcessor
+from cbcpost import  ParamDict, PostProcessor
 from dolfin import *
 
 from os import path
@@ -30,7 +30,7 @@ class NS3rdVentricle(NSProblem):
             )
         return params
 
-    def __init__(self, params=None):
+    def __init__(self, ,params=None):
         NSProblem.__init__(self, params)
 
         # Load mesh
@@ -63,13 +63,22 @@ class NS3rdVentricle(NSProblem):
             tvalues = np.linspace(0.0, P)
 
             Qfloor, Qpeak = -0.9, 1.9 #relative peak and floor.
-            Qvalues = Q * (Qfloor + (Qpeak-Qfloor)*np.sin(pi*((P-tvalues)/P)**2)**2)
-            Qvalues2 = Q2 * (Qfloor + (Qpeak-Qfloor)*np.sin(pi*((P-tvalues)/P)**2)**2)
+            phase = np.tan(Qpeak/-Qfloor) # Phase denotes a phase shift, such that Qvalues start close to Q=0
+            Qvalues = Q * (Qfloor + (Qpeak-Qfloor)*np.sin(pi*((P-tvalues)/P)**2)**2 + phase)
+
+
+
+            Qvalues2 = Q2 * (Qfloor + (Qpeak-Qfloor)*np.sin(pi*((P-tvalues)/P)**2)**2 )
             self.Q_coeffs = zip(tvalues, Qvalues)
 	    self.Q_coeffs2 = zip(tvalues, Qvalues)
 		
         # Store mesh and markers
-        self.initialize_geometry(mesh) #, facet_domains=facet_domains) #Inlcude facet_domains ? 
+	facet_domains = FacetFunction('size_t', mesh, 0)
+	for f,marker in ([int(f),marker] for f, marker in mesh.domains().markers(2).iteritems()):
+		facet_domains[f] = marker
+
+        self.initialize_geometry(mesh , facet_domains=facet_domains)
+        #self.initialize_geometry(mesh) #, facet_domains=facet_domains) #Inlcude facet_domains ? 
 
     def womersly_aquaduct(self, spaces, t):
         ua = make_womersley_bcs(self.Q_coeffs, self.mesh, self.aquaduct_boundary_id, self.nu, None)
@@ -107,24 +116,6 @@ class NS3rdVentricle(NSProblem):
 	c0 =Constant("0.0")
 	icu = [c0 ,c0 ,c0]
 	icp = c0
-
-        # Initialize the particles here. I think this is the first place where
-        # velocity space is available. Init might be a better place for this
-        # but this is close second
-        lpc = LPCollection(spaces.U)
-        # For now we add particles everywhere. Later subdomains (CellFunction)
-        # and markers for selected regions should be also given
-        # NOTE: nparticles is the total count.
-        nparticles = self.params.nparticles/lpc.comm.size
-        subdomain_seed(lpc, nparticles)
-        self.lpc = lpc
-
-        # FIXME: this should be part of some postprocessor
-        if self.lpc.comm.rank == 0:
-            self.particle_log = 'test.txt'
-            f = open(self.particle_log, 'w')
-            f.close()
-
         return (icu ,icp)
 
     def boundary_conditions(self, spaces, u, p, t, controls):
@@ -159,16 +150,6 @@ class NS3rdVentricle(NSProblem):
         return (bcu, bcp)
 
     def update(self, spaces, u, p, t, timestep, bcs, observations, controls):
-        # FIXME: ideally this should be part of solver.solve(...)
-        self.lpc.step(u, self.params.dt)
-
-        # Storing, FIXME: this should be part of some postprocessor
-        nparticles = self.lpc.particle_count().gc 
-        if self.lpc.comm.rank == 0:
-            f = open(self.particle_log, 'a')
-            f.write('%d\n' % nparticles)
-            f.close()
-
         bcu, bcp = bcs
         uin = bcu[1][0]
         for ucomp in uin:
@@ -176,6 +157,7 @@ class NS3rdVentricle(NSProblem):
 
 
 def main():
+
     problem = NS3rdVentricle()
     scheme = IPCS(dict(
         rebuild_prec_frequency = 1,
@@ -208,7 +190,19 @@ def main():
 	Flux(2, plot_and_save),
 	Flux(3, plot_and_save)]
     postproc = PostProcessor({"casedir": casedir})
+
+
+
     postproc.add_fields(fields)
+    subdomains = CellFunction('size_t', mesh, 0) # mesh ??
+    CompiledSubDomain('x[2] > 0.2').mark(subdomains, 1)
+
+    property_layout = [('Tag', 1)]
+    params =  dict(save=True,save_as=["xdmf"],start_time=0)
+    
+    lpc = LPCollection(V,property_layout,params) # <- 
+    subdomain_seed(lpc, nparticles, subdomains, [1])
+    postproc.add_field(lpc)
 
     solver = NSSolver(problem, scheme, postproc)
     solver.solve()
